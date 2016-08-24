@@ -291,7 +291,7 @@ config SND_SOC_ADAU1761_I2C
 	select REGMAP_I2C
 
 config SND_SOC_ADAU1761_SPI
-	tristate
+	tristate "Analog Devices ADAU1761 CODEC"
 	select SND_SOC_ADAU1761
 	select REGMAP_SPI
 
