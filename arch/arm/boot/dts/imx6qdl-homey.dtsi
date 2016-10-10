@@ -133,8 +133,11 @@
 
 &i2c3 {
 	clock-frequency = <100000>;
-	pinctrl-names = "default";
+	pinctrl-names = "default", "gpio";
 	pinctrl-0 = <&pinctrl_homey_i2c3>;
+	pinctrl-1 = <&pinctrl_homey_i2c3_gpio>;
+	scl-gpios = <&gpio3 17 GPIO_ACTIVE_HIGH>;
+	sda-gpios = <&gpio3 18 GPIO_ACTIVE_HIGH>;
 	status = "okay";
 
 	adau1761: adau1761@38 {
@@ -222,6 +225,13 @@
 			fsl,pins = <
 				MX6QDL_PAD_EIM_D17__I2C3_SCL 0x4001b8b1
 				MX6QDL_PAD_EIM_D18__I2C3_SDA 0x4001b8b1
+			>;
+		};
+		
+		pinctrl_homey_i2c3_gpio: homey-i2c3_gpio {
+			fsl,pins = <
+				MX6QDL_PAD_EIM_D17__GPIO3_IO17 0x4001b8b1
+				MX6QDL_PAD_EIM_D18__GPIO3_IO18 0x4001b8b1
 			>;
 		};
 
