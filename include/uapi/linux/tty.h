@@ -35,5 +35,6 @@
 #define N_TRACESINK	23	/* Trace data routing for MIPI P1149.7 */
 #define N_TRACEROUTER	24	/* Trace data routing for MIPI P1149.7 */
 #define N_NCI		25	/* NFC NCI UART */
+#define N_ZWAVE		26	/* sigma ZM UART */
 
 #endif /* _UAPI_LINUX_TTY_H */
