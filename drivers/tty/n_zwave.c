@@ -622,7 +622,7 @@ static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
                 	}
 
                 	if (!buf) {
-                        printk("%s(%d) no more rx buffers, data discarded\n",
+                        printk(KERN_ERR"%s(%d) no more rx buffers, data discarded\n",
                 			       __FILE__,__LINE__);
                 		return;
                 	}
@@ -634,44 +634,44 @@ static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
             	    n_zwave_got_ack(n_zwave);
                 break;
             	case ZWAVE_NAK:
-            	    printk("%s(%d) got NAK\n",
+            	    printk(KERN_ERR"%s(%d) got NAK\n",
                 			       __FILE__,__LINE__);
             	    n_zwave_got_nak(n_zwave);
                 break;
             	case ZWAVE_CAN:
-            	    printk("%s(%d) got CAN\n",
+            	    printk(KERN_ERR"%s(%d) got CAN\n",
                 			       __FILE__,__LINE__);
             	    n_zwave_got_can(n_zwave);
                 break;
             	default:
-            	   printk("%s(%d) unknown frame from tty, data discarded\n",
+            	   printk(KERN_WARNING"%s(%d) unknown frame from tty, data discarded\n",
                     			       __FILE__,__LINE__);
         	}
     	}
         if(buf) { //We are receiving
             buf->buf[buf->count++] = data[i];
-        }
-    	if(n_zwave_is_complete_frame(buf->buf, buf->count)) {
+        	if(n_zwave_is_complete_frame(buf->buf, buf->count)) {
 
-        	n_zwave->rbuf = NULL;
+            	n_zwave->rbuf = NULL;
 
-        	if(!n_zwave_is_valid_frame(buf->buf, buf->count)) {
-                printk("%s(%d) got invalid frame, sending NAK\n",
-                			       __FILE__,__LINE__);
-            	n_zwave_send_nak(n_zwave);
-            	n_zwave_buf_put(&n_zwave->rx_free_buf_list, buf);
-        	} else {
-            	n_zwave_send_ack(n_zwave);
+            	if(!n_zwave_is_valid_frame(buf->buf, buf->count)) {
+                    printk("%s(%d) got invalid frame, sending NAK\n",
+                    			       __FILE__,__LINE__);
+                	n_zwave_send_nak(n_zwave);
+                	n_zwave_buf_put(&n_zwave->rx_free_buf_list, buf);
+            	} else {
+                	n_zwave_send_ack(n_zwave);
 
-            	/* add ZWAVE buffer to list of received frames */
-            	n_zwave_buf_put(&n_zwave->rx_buf_list, buf);
+                	/* add ZWAVE buffer to list of received frames */
+                	n_zwave_buf_put(&n_zwave->rx_buf_list, buf);
 
-            	/* wake up any blocked reads and perform async signalling */
-            	wake_up_interruptible (&tty->read_wait);
-            	if (n_zwave->tty->fasync != NULL)
-            		kill_fasync (&n_zwave->tty->fasync, SIGIO, POLL_IN);
-        	}
+                	/* wake up any blocked reads and perform async signalling */
+                	wake_up_interruptible (&tty->read_wait);
+                	if (n_zwave->tty->fasync != NULL)
+                		kill_fasync (&n_zwave->tty->fasync, SIGIO, POLL_IN);
+            	}
 
+            }
         }
     }
 }	/* end of n_zwave_tty_receive() */
