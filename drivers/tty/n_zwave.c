@@ -144,6 +144,7 @@ struct n_zwave_buf_list {
  * @rx_free_buf_list - list unused received frame buffers
  * @send_ack - indicates if an ACK frame should be sent ASAP
  * @send_nak - indicates if a NAK frame should be sent ASAP
+ * @is_busy - indicates if a thread is writing data
  */
 struct n_zwave {
 	int			magic;
@@ -157,6 +158,7 @@ struct n_zwave {
 	struct n_zwave_buf_list	rx_free_buf_list;
 	int send_ack;
 	int send_nak;
+	int is_busy;
 };
 
 /*
@@ -272,32 +274,35 @@ static void n_zwave_send_nak(struct n_zwave *n_zwave)
 
 static void n_zwave_got_ack(struct n_zwave *n_zwave)
 {
-    n_zwave->tbuf->state = ZWAVE_FRAME_STATE_GOT_ACK;
+    if (debuglevel >= DEBUG_LEVEL_INFO)
+        printk("%s(%d)n_zwave_got_ack() for %p\n",
+                __FILE__,__LINE__, n_zwave->tbuf );
+    if(n_zwave->tbuf) n_zwave->tbuf->state = ZWAVE_FRAME_STATE_GOT_ACK;
 
 	/* wait up sleeping writers */
 	wake_up_interruptible(&n_zwave->tty->write_wait);
-
-	set_bit(TTY_DO_WRITE_WAKEUP, &n_zwave->tty->flags);
 }
 
 static void n_zwave_got_nak(struct n_zwave *n_zwave)
 {
-    n_zwave->tbuf->state = ZWAVE_FRAME_STATE_GOT_NAK;
+    if (debuglevel >= DEBUG_LEVEL_INFO)
+        printk("%s(%d)n_zwave_got_nak() for %p\n",
+                __FILE__,__LINE__, n_zwave->tbuf);
+    if(n_zwave->tbuf) n_zwave->tbuf->state = ZWAVE_FRAME_STATE_GOT_NAK;
 
 	/* wait up sleeping writers */
 	wake_up_interruptible(&n_zwave->tty->write_wait);
-
-	set_bit(TTY_DO_WRITE_WAKEUP, &n_zwave->tty->flags);
 }
 
 static void n_zwave_got_can(struct n_zwave *n_zwave)
 {
-    n_zwave->tbuf->state = ZWAVE_FRAME_STATE_GOT_CAN;
+    if (debuglevel >= DEBUG_LEVEL_INFO)
+        printk("%s(%d)n_zwave_got_can() for %p\n",
+                __FILE__,__LINE__, n_zwave->tbuf);
+    if(n_zwave->tbuf) n_zwave->tbuf->state = ZWAVE_FRAME_STATE_GOT_CAN;
 
 	/* wait up sleeping writers */
 	wake_up_interruptible(&n_zwave->tty->write_wait);
-
-	set_bit(TTY_DO_WRITE_WAKEUP, &n_zwave->tty->flags);
 }
 
 static int n_zwave_is_complete_frame(const unsigned char *buf, size_t count)
@@ -313,7 +318,7 @@ static __u8 n_zwave_calc_checksum(const unsigned char *buf)
     size_t length = buf[ZWAVE_FIELD_LENGTH];
     int i = ZWAVE_FIELD_LENGTH;
     while(i <= length) {
-        result &= buf[i];
+        result ^= buf[i];
         i++;
     }
     return result;
@@ -328,7 +333,7 @@ static int n_zwave_is_valid_frame(const unsigned char *buf, size_t count)
 {
     return (   n_zwave_is_complete_frame(buf, count)
             && buf[ZWAVE_FIELD_TYPE] == ZWAVE_SOF
-            && buf[ZWAVE_FIELD_LENGTH] == count+2
+            && buf[ZWAVE_FIELD_LENGTH]+2 == count
             && n_zwave_calc_checksum(buf) == n_zwave_get_checksum(buf)
            );
 }
@@ -456,6 +461,8 @@ static int n_zwave_tty_open (struct tty_struct *tty)
 	if (debuglevel >= DEBUG_LEVEL_INFO)
 		printk("%s(%d)n_zwave_tty_open() success\n",__FILE__,__LINE__);
 
+    n_zwave_send_nak(n_zwave);
+
 	return 0;
 
 }	/* end of n_tty_zwave_open() */
@@ -473,13 +480,21 @@ static void n_zwave_send_frames(struct n_zwave *n_zwave, struct tty_struct *tty)
 {
 	register int actual;
 	struct n_zwave_buf *tbuf;
+    unsigned long flags;
 
 	if (debuglevel >= DEBUG_LEVEL_INFO)
 		printk("%s(%d)n_zwave_send_frames() called\n",__FILE__,__LINE__);
 
+	spin_lock_irqsave(&n_zwave->tx_buf_list.spinlock,flags);
+	if(n_zwave->is_busy) {
+    	spin_unlock_irqrestore(&n_zwave->tx_buf_list.spinlock,flags);
+    	return;
+	}
+	n_zwave->is_busy = 1;
+	spin_unlock_irqrestore(&n_zwave->tx_buf_list.spinlock,flags);
+
 	/* get current transmit buffer or get new transmit */
 	/* buffer from list of pending transmit buffers */
-
 	tbuf = n_zwave->tbuf;
 	if (!tbuf)
 		tbuf = n_zwave_buf_get(&n_zwave->tx_buf_list);
@@ -507,12 +522,16 @@ static void n_zwave_send_frames(struct n_zwave *n_zwave, struct tty_struct *tty)
 					__FILE__,__LINE__,tbuf);
 
 			/* buffer not accepted by driver */
-			/* set this buffer as pending buffer */
-			n_zwave->tbuf = tbuf;
 		}
+        /* set this buffer as pending buffer */
+        n_zwave->tbuf = tbuf;
 	}
-    if(!n_zwave->tbuf || n_zwave->tbuf->state == ZWAVE_FRAME_STATE_WAITING)
+    if(!n_zwave->tbuf)
 	    clear_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
+
+    spin_lock_irqsave(&n_zwave->tx_buf_list.spinlock,flags);
+	n_zwave->is_busy = 0;
+	spin_unlock_irqrestore(&n_zwave->tx_buf_list.spinlock,flags);
 
 	if (debuglevel >= DEBUG_LEVEL_INFO)
 		printk("%s(%d)n_zwave_send_frames() exit\n",__FILE__,__LINE__);
@@ -539,6 +558,7 @@ static void n_zwave_tty_wakeup(struct tty_struct *tty)
 		clear_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
 		return;
 	}
+	set_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
     if(n_zwave->send_ack) {
         n_zwave_send_ack(n_zwave);
     } else if(n_zwave->send_nak) {
@@ -589,6 +609,9 @@ static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
     	if(!buf) {
         	switch(data[i]) {
             	case ZWAVE_SOF:
+            		if (debuglevel >= DEBUG_LEVEL_INFO)
+                        printk("%s(%d)n_zwave_tty_receive() got SOF\n",
+                                __FILE__,__LINE__);
                     /* get a free ZWAVE buffer */
             	    buf = n_zwave_buf_get(&n_zwave->rx_free_buf_list);
                 	if (!buf) {
@@ -599,8 +622,7 @@ static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
                 	}
 
                 	if (!buf) {
-                		if (debuglevel >= DEBUG_LEVEL_INFO)
-                			printk("%s(%d) no more rx buffers, data discarded\n",
+                        printk("%s(%d) no more rx buffers, data discarded\n",
                 			       __FILE__,__LINE__);
                 		return;
                 	}
@@ -626,9 +648,9 @@ static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
                     			       __FILE__,__LINE__);
         	}
     	}
-
-        buf->buf[buf->count++] = data[i];
-
+        if(buf) { //We are receiving
+            buf->buf[buf->count++] = data[i];
+        }
     	if(n_zwave_is_complete_frame(buf->buf, buf->count)) {
 
         	n_zwave->rbuf = NULL;
@@ -768,9 +790,15 @@ static ssize_t n_zwave_tty_write(struct tty_struct *tty, struct file *file,
 
 	/* verify frame size */
 	if (count > MAX_ZWAVE_FRAME_SIZE ) {
+        if (debuglevel >= DEBUG_LEVEL_INFO)
+		    printk("%s(%d)n_zwave_tty_write() frame too large\n",
+			        __FILE__,__LINE__);
         return -EINVAL;
 	}
 	if( !n_zwave_is_valid_frame(data, count)) {
+        if (debuglevel >= DEBUG_LEVEL_INFO)
+		    printk("%s(%d)n_zwave_tty_write() invalid packet\n",
+			        __FILE__,__LINE__);
     	return -EINVAL;
 	}
 
@@ -806,6 +834,10 @@ static ssize_t n_zwave_tty_write(struct tty_struct *tty, struct file *file,
 	__set_current_state(TASK_RUNNING);
 	remove_wait_queue(&tty->write_wait, &wait);
 
+    if (debuglevel >= DEBUG_LEVEL_INFO)
+        printk("%s(%d)n_zwave_tty_write() got buffer or error: %d\n",
+			        __FILE__,__LINE__, error);
+
 	if (!error) {
 		/* Retrieve the user's buffer */
 		memcpy(tbuf->buf, data, count);
@@ -815,16 +847,25 @@ static ssize_t n_zwave_tty_write(struct tty_struct *tty, struct file *file,
 		tbuf->state = ZWAVE_FRAME_STATE_QUEUED;
 		n_zwave_buf_put(&n_zwave->tx_buf_list,tbuf);
 		/* Tell device to request data */
-		set_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
+
+        if (debuglevel >= DEBUG_LEVEL_INFO)
+            printk("%s(%d)n_zwave_tty_write() requesting wakeup.\n",
+			        __FILE__,__LINE__);
+
+		n_zwave_tty_wakeup(tty);
 
     	add_wait_queue(&tty->write_wait, &wait);
 
     	if(!wait_event_timeout(tty->write_wait,
-    					     (tbuf->state == ZWAVE_FRAME_STATE_WAITING || tbuf->state == ZWAVE_FRAME_STATE_QUEUED),
+    					     (tbuf->state != ZWAVE_FRAME_STATE_WAITING && tbuf->state != ZWAVE_FRAME_STATE_QUEUED),
     					     msecs_to_jiffies(ZWAVE_ACK_TIMEOUT_MILLISECS)))
             error = -ETIMEDOUT;
     	else if(tbuf->state == ZWAVE_FRAME_STATE_GOT_NAK) error = -EBADE;
     	else if(tbuf->state == ZWAVE_FRAME_STATE_GOT_CAN) error = -ECANCELED;
+
+        if (debuglevel >= DEBUG_LEVEL_INFO)
+            printk("%s(%d)n_zwave_tty_write() state changed to: %d, error:%d\n",
+			        __FILE__,__LINE__, tbuf->state, error);
 
         remove_wait_queue(&tty->write_wait, &wait);
 	}
