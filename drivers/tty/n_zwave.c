@@ -137,7 +137,6 @@ struct n_zwave_buf_list {
  * @flags - miscellaneous control flags
  * @tty - ptr to TTY structure
  * @tbuf - currently transmitting tx buffer
- * @rbuf - currently receiving rx buffer
  * @tx_buf_list - list of pending transmit frame buffers
  * @rx_buf_list - list of received frame buffers
  * @tx_free_buf_list - list unused transmit frame buffers
@@ -151,7 +150,6 @@ struct n_zwave {
 	__u32			flags;
 	struct tty_struct	*tty;
 	struct n_zwave_buf	*tbuf;
-	struct n_zwave_buf	*rbuf;
 	struct n_zwave_buf_list	tx_buf_list;
 	struct n_zwave_buf_list	rx_buf_list;
 	struct n_zwave_buf_list	tx_free_buf_list;
@@ -189,7 +187,7 @@ static unsigned int n_zwave_tty_poll(struct tty_struct *tty, struct file *filp,
 				    poll_table *wait);
 static int n_zwave_tty_open(struct tty_struct *tty);
 static void n_zwave_tty_close(struct tty_struct *tty);
-static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *cp,
+static int n_zwave_tty_receive(struct tty_struct *tty, const __u8 *cp,
 			       char *fp, int count);
 static void n_zwave_tty_wakeup(struct tty_struct *tty);
 
@@ -202,16 +200,9 @@ static void flush_rx_queue(struct tty_struct *tty)
 {
 	struct n_zwave *n_zwave = tty2n_zwave(tty);
 	struct n_zwave_buf *buf;
-	unsigned long flags;
 
 	while ((buf = n_zwave_buf_get(&n_zwave->rx_buf_list)))
 		n_zwave_buf_put(&n_zwave->rx_free_buf_list, buf);
-    spin_lock_irqsave(&n_zwave->rx_buf_list.spinlock, flags);
-	if (n_zwave->rbuf) {
-		n_zwave_buf_put(&n_zwave->rx_free_buf_list, n_zwave->rbuf);
-		n_zwave->rbuf = NULL;
-	}
-	spin_unlock_irqrestore(&n_zwave->rx_buf_list.spinlock, flags);
 }
 
 static void flush_tx_queue(struct tty_struct *tty)
@@ -240,7 +231,7 @@ static struct tty_ldisc_ops n_zwave_ldisc = {
 	.write		= n_zwave_tty_write,
 	.ioctl		= n_zwave_tty_ioctl,
 	.poll		= n_zwave_tty_poll,
-	.receive_buf	= n_zwave_tty_receive,
+	.receive_buf2	= n_zwave_tty_receive,
 	.write_wakeup	= n_zwave_tty_wakeup,
 	.flush_buffer   = flush_rx_queue,
 };
@@ -250,6 +241,9 @@ static struct tty_ldisc_ops n_zwave_ldisc = {
  */
 static void n_zwave_send_ack(struct n_zwave *n_zwave)
 {
+    if (debuglevel >= DEBUG_LEVEL_INFO)
+        printk("%s(%d)n_zwave_send_ack()\n",
+                __FILE__,__LINE__ );
     if(n_zwave->tty->ops->write_room(n_zwave->tty) >= sizeof(ZWAVE_ACK_FRAME)) {
         n_zwave->tty->ops->write(n_zwave->tty, ZWAVE_ACK_FRAME, sizeof(ZWAVE_ACK_FRAME));
         n_zwave->send_ack = 0;
@@ -257,11 +251,17 @@ static void n_zwave_send_ack(struct n_zwave *n_zwave)
         n_zwave->send_ack = 1;
 
         set_bit(TTY_DO_WRITE_WAKEUP, &n_zwave->tty->flags);
+        if (debuglevel >= DEBUG_LEVEL_INFO)
+            printk("%s(%d)n_zwave_send_ack() no room available, requesting wakeup\n",
+                __FILE__,__LINE__ );
 	}
 }
 
 static void n_zwave_send_nak(struct n_zwave *n_zwave)
 {
+    if (debuglevel >= DEBUG_LEVEL_INFO)
+        printk("%s(%d)n_zwave_send_nak()\n",
+                __FILE__,__LINE__ );
     if(n_zwave->tty->ops->write_room(n_zwave->tty) >= sizeof(ZWAVE_NAK_FRAME)) {
         n_zwave->tty->ops->write(n_zwave->tty, ZWAVE_NAK_FRAME, sizeof(ZWAVE_NAK_FRAME));
         n_zwave->send_nak = 0;
@@ -269,6 +269,9 @@ static void n_zwave_send_nak(struct n_zwave *n_zwave)
         n_zwave->send_nak = 1;
 
         set_bit(TTY_DO_WRITE_WAKEUP, &n_zwave->tty->flags);
+        if (debuglevel >= DEBUG_LEVEL_INFO)
+            printk("%s(%d)n_zwave_send_nak() no room available, requesting wakeup\n",
+                __FILE__,__LINE__ );
 	}
 }
 
@@ -278,6 +281,7 @@ static void n_zwave_got_ack(struct n_zwave *n_zwave)
         printk("%s(%d)n_zwave_got_ack() for %p\n",
                 __FILE__,__LINE__, n_zwave->tbuf );
     if(n_zwave->tbuf) n_zwave->tbuf->state = ZWAVE_FRAME_STATE_GOT_ACK;
+    n_zwave->tbuf = NULL;
 
 	/* wait up sleeping writers */
 	wake_up_interruptible(&n_zwave->tty->write_wait);
@@ -289,7 +293,7 @@ static void n_zwave_got_nak(struct n_zwave *n_zwave)
         printk("%s(%d)n_zwave_got_nak() for %p\n",
                 __FILE__,__LINE__, n_zwave->tbuf);
     if(n_zwave->tbuf) n_zwave->tbuf->state = ZWAVE_FRAME_STATE_GOT_NAK;
-
+    n_zwave->tbuf = NULL;
 	/* wait up sleeping writers */
 	wake_up_interruptible(&n_zwave->tty->write_wait);
 }
@@ -300,7 +304,7 @@ static void n_zwave_got_can(struct n_zwave *n_zwave)
         printk("%s(%d)n_zwave_got_can() for %p\n",
                 __FILE__,__LINE__, n_zwave->tbuf);
     if(n_zwave->tbuf) n_zwave->tbuf->state = ZWAVE_FRAME_STATE_GOT_CAN;
-
+    n_zwave->tbuf = NULL;
 	/* wait up sleeping writers */
 	wake_up_interruptible(&n_zwave->tty->write_wait);
 }
@@ -324,6 +328,18 @@ static __u8 n_zwave_calc_checksum(const unsigned char *buf)
     return result;
 }
 
+static void n_zwave_print_frame(const unsigned char *buf, size_t count)
+{
+    int i;
+    if (debuglevel < DEBUG_LEVEL_INFO) return;
+    printk("======== START ZWAVE FRAME =========");
+    for(i = 0; i < count; i++) {
+        if(i % 16 == 0) printk("\n");
+        printk("%u ",buf[i]);
+    }
+    printk("\n======== END ZWAVE FRAME =========\n");
+}
+
 static __u8 n_zwave_get_checksum(const unsigned char *buf)
 {
     return buf[buf[ZWAVE_FIELD_LENGTH]+1];
@@ -331,11 +347,21 @@ static __u8 n_zwave_get_checksum(const unsigned char *buf)
 
 static int n_zwave_is_valid_frame(const unsigned char *buf, size_t count)
 {
-    return (   n_zwave_is_complete_frame(buf, count)
+    int res = (   n_zwave_is_complete_frame(buf, count)
             && buf[ZWAVE_FIELD_TYPE] == ZWAVE_SOF
             && buf[ZWAVE_FIELD_LENGTH]+2 == count
             && n_zwave_calc_checksum(buf) == n_zwave_get_checksum(buf)
            );
+    if(!res) {
+        printk("n_zwave_tty_receive Invalid frame, %d+%d+%d+%d => %d (checksums %u %u)\n",
+                n_zwave_is_complete_frame(buf, count),
+                buf[ZWAVE_FIELD_TYPE] == ZWAVE_SOF,
+                buf[ZWAVE_FIELD_LENGTH]+2 == count,
+                n_zwave_calc_checksum(buf) == n_zwave_get_checksum(buf),
+                res, n_zwave_calc_checksum(buf), n_zwave_get_checksum(buf)
+            );
+    }
+    return res;
 }
 
 /**
@@ -386,8 +412,7 @@ static void n_zwave_release(struct n_zwave *n_zwave)
 		} else
 			break;
 	}
-	kfree(n_zwave->tbuf);
-	kfree(n_zwave->rbuf);
+	kfree(n_zwave->tbuf); //TODO
 	kfree(n_zwave);
 
 }	/* end of n_zwave_release() */
@@ -579,12 +604,12 @@ static void n_zwave_tty_wakeup(struct tty_struct *tty)
  * Called by tty low level driver when receive data is available. Data is
  * interpreted as one ZWAVE frame.
  */
-static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
+static int n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
 			       char *flags, int count)
 {
 	register struct n_zwave *n_zwave = tty2n_zwave (tty);
 	register struct n_zwave_buf *buf;
-    size_t i;
+    size_t i, j;
 
 	if (debuglevel >= DEBUG_LEVEL_INFO)
 		printk("%s(%d)n_zwave_tty_receive() called count=%d\n",
@@ -592,19 +617,18 @@ static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
 
 	/* This can happen if stuff comes in on the backup tty */
 	if (!n_zwave || tty != n_zwave->tty)
-		return;
+		return 0;
 
 	/* verify line is using ZWAVE discipline */
 	if (n_zwave->magic != ZWAVE_MAGIC) {
 		printk("%s(%d) line not using ZWAVE discipline\n",
 			__FILE__,__LINE__);
-		return;
+		return 0;
 	}
 
-	for(i = 0; i < count; i++) {
-
-    	/* get current ZWAVE rx buffer */
-    	buf = n_zwave->rbuf;
+    /* get current ZWAVE rx buffer */
+    buf = NULL;
+	for(i = 0, j = 0; i < count; i++) {
 
     	if(!buf) {
         	switch(data[i]) {
@@ -622,40 +646,50 @@ static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
                 	}
 
                 	if (!buf) {
-                        printk(KERN_ERR"%s(%d) no more rx buffers, data discarded\n",
+                        printk(KERN_ERR"%s(%d)n_zwave_tty_receive() no more rx buffers, data discarded\n",
                 			       __FILE__,__LINE__);
-                		return;
+                		return j;
                 	}
                 	buf->count = 0; //reset count
                 	buf->state = ZWAVE_FRAME_STATE_WAITING;
-                	n_zwave->rbuf = buf;
                 break;
             	case ZWAVE_ACK:
+            	    if (debuglevel >= DEBUG_LEVEL_INFO)
+                        printk("%s(%d)n_zwave_tty_receive() got ACK\n",
+                                __FILE__,__LINE__);
             	    n_zwave_got_ack(n_zwave);
+            	    j++;
                 break;
             	case ZWAVE_NAK:
-            	    printk(KERN_ERR"%s(%d) got NAK\n",
+            	    printk(KERN_ERR"%s(%d)n_zwave_tty_receive() got NAK\n",
                 			       __FILE__,__LINE__);
             	    n_zwave_got_nak(n_zwave);
+            	    j++;
                 break;
             	case ZWAVE_CAN:
-            	    printk(KERN_ERR"%s(%d) got CAN\n",
+            	    printk(KERN_ERR"%s(%d)n_zwave_tty_receive() got CAN\n",
                 			       __FILE__,__LINE__);
             	    n_zwave_got_can(n_zwave);
+            	    j++;
                 break;
             	default:
-            	   printk(KERN_WARNING"%s(%d) unknown frame from tty, data discarded\n",
+            	    printk(KERN_WARNING"%s(%d)n_zwave_tty_receive() unknown frame type from tty, data discarded\n",
                     			       __FILE__,__LINE__);
+            	    j++;
         	}
     	}
         if(buf) { //We are receiving
             buf->buf[buf->count++] = data[i];
         	if(n_zwave_is_complete_frame(buf->buf, buf->count)) {
 
-            	n_zwave->rbuf = NULL;
+                if (debuglevel >= DEBUG_LEVEL_INFO)
+                    printk("%s(%d)n_zwave_tty_receive() got complete frame, count=%d\n",
+                        __FILE__,__LINE__, buf->count);
+
+                n_zwave_print_frame(buf->buf, buf->count);
 
             	if(!n_zwave_is_valid_frame(buf->buf, buf->count)) {
-                    printk("%s(%d) got invalid frame, sending NAK\n",
+                    printk("%s(%d)n_zwave_tty_receive() got invalid frame, sending NAK\n",
                     			       __FILE__,__LINE__);
                 	n_zwave_send_nak(n_zwave);
                 	n_zwave_buf_put(&n_zwave->rx_free_buf_list, buf);
@@ -670,10 +704,17 @@ static void n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
                 	if (n_zwave->tty->fasync != NULL)
                 		kill_fasync (&n_zwave->tty->fasync, SIGIO, POLL_IN);
             	}
-
+            	j += buf->count;
+                buf = NULL;
             }
         }
     }
+
+    if (debuglevel >= DEBUG_LEVEL_INFO)
+		printk("%s(%d)n_zwave_tty_receive() exit processed=%d\n",
+			__FILE__,__LINE__, j);
+
+    return j;
 }	/* end of n_zwave_tty_receive() */
 
 /**
@@ -721,6 +762,9 @@ static ssize_t n_zwave_tty_read(struct tty_struct *tty, struct file *file,
 
 		rbuf = n_zwave_buf_get(&n_zwave->rx_buf_list);
 		if (rbuf) {
+            if (debuglevel >= DEBUG_LEVEL_INFO)
+                printk("%s(%d)n_zwave_tty_read() got buffer %p, count=%Zd\n",
+                        __FILE__,__LINE__,rbuf, rbuf->count);
 			if (rbuf->count > nr) {
 				/* too large for caller's buffer */
 				ret = -EOVERFLOW;
