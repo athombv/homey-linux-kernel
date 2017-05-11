@@ -413,7 +413,7 @@ static void n_zwave_release(struct n_zwave *n_zwave)
 		} else
 			break;
 	}
-	kfree(n_zwave->tbuf); //TODO
+	kfree(n_zwave->tbuf);
 	kfree(n_zwave);
 
 }	/* end of n_zwave_release() */
