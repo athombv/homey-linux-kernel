@@ -335,9 +335,10 @@ static void n_zwave_print_frame(const unsigned char *buf, size_t count)
     printk("======== START ZWAVE FRAME =========");
     for(i = 0; i < count; i++) {
         if(i % 16 == 0) printk("\n");
-        printk("%u ",buf[i]);
+        printk("%2x ",buf[i]);
     }
-    printk("\n======== END ZWAVE FRAME =========\n");
+    printk("\n");
+    printk("======== END ZWAVE FRAME =========\n");
 }
 
 static __u8 n_zwave_get_checksum(const unsigned char *buf)
@@ -353,7 +354,7 @@ static int n_zwave_is_valid_frame(const unsigned char *buf, size_t count)
             && n_zwave_calc_checksum(buf) == n_zwave_get_checksum(buf)
            );
     if(!res) {
-        printk("n_zwave_tty_receive Invalid frame, %d+%d+%d+%d => %d (checksums %u %u)\n",
+        printk("n_zwave_tty_receive Invalid frame, %d+%d+%d+%d => %d (checksums expected=%u got=%u)\n",
                 n_zwave_is_complete_frame(buf, count),
                 buf[ZWAVE_FIELD_TYPE] == ZWAVE_SOF,
                 buf[ZWAVE_FIELD_LENGTH]+2 == count,
@@ -614,6 +615,7 @@ static int n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
 	if (debuglevel >= DEBUG_LEVEL_INFO)
 		printk("%s(%d)n_zwave_tty_receive() called count=%d\n",
 			__FILE__,__LINE__, count);
+	n_zwave_print_frame(data, count);
 
 	/* This can happen if stuff comes in on the backup tty */
 	if (!n_zwave || tty != n_zwave->tty)
@@ -625,6 +627,7 @@ static int n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
 			__FILE__,__LINE__);
 		return 0;
 	}
+
 
     /* get current ZWAVE rx buffer */
     buf = NULL;
@@ -710,11 +713,16 @@ static int n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
         }
     }
 
+    if(buf) {
+        //TODO: Figure out why double parts of packets are received
+        n_zwave_buf_put(&n_zwave->rx_free_buf_list, buf);
+    }
+
     if (debuglevel >= DEBUG_LEVEL_INFO)
 		printk("%s(%d)n_zwave_tty_receive() exit processed=%d\n",
-			__FILE__,__LINE__, j);
+			__FILE__,__LINE__, i);
 
-    return j;
+    return i;
 }	/* end of n_zwave_tty_receive() */
 
 /**
@@ -876,7 +884,6 @@ static ssize_t n_zwave_tty_write(struct tty_struct *tty, struct file *file,
 	}
 
 	__set_current_state(TASK_RUNNING);
-	remove_wait_queue(&tty->write_wait, &wait);
 
     if (debuglevel >= DEBUG_LEVEL_INFO)
         printk("%s(%d)n_zwave_tty_write() got buffer or error: %d\n",
@@ -898,9 +905,7 @@ static ssize_t n_zwave_tty_write(struct tty_struct *tty, struct file *file,
 
 		n_zwave_tty_wakeup(tty);
 
-    	add_wait_queue(&tty->write_wait, &wait);
-
-    	if(!wait_event_timeout(tty->write_wait,
+    	if(!wait_event_interruptible_timeout(tty->write_wait,
     					     (tbuf->state != ZWAVE_FRAME_STATE_WAITING && tbuf->state != ZWAVE_FRAME_STATE_QUEUED),
     					     msecs_to_jiffies(ZWAVE_ACK_TIMEOUT_MILLISECS)))
             error = -ETIMEDOUT;
@@ -911,8 +916,8 @@ static ssize_t n_zwave_tty_write(struct tty_struct *tty, struct file *file,
             printk("%s(%d)n_zwave_tty_write() state changed to: %d, error:%d\n",
 			        __FILE__,__LINE__, tbuf->state, error);
 
-        remove_wait_queue(&tty->write_wait, &wait);
 	}
+	remove_wait_queue(&tty->write_wait, &wait);
 
     /* free current transmit buffer */
 	n_zwave_buf_put(&n_zwave->tx_free_buf_list, tbuf);
