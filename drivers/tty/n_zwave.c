@@ -328,17 +328,17 @@ static __u8 n_zwave_calc_checksum(const unsigned char *buf)
     return result;
 }
 
-static void n_zwave_print_frame(const unsigned char *buf, size_t count)
+static void n_zwave_print_frame(const unsigned char *buf, size_t count, const char *name)
 {
     int i;
     if (debuglevel < DEBUG_LEVEL_INFO) return;
-    printk("======== START ZWAVE FRAME =========");
-    for(i = 0; i < count; i++) {
+    printk("======== START %s FRAME =========", name);
+    for(i = 0; i < count && buf; i++) {
         if(i % 16 == 0) printk("\n");
         printk("%2x ",buf[i]);
     }
     printk("\n");
-    printk("======== END ZWAVE FRAME =========\n");
+    printk("======== END %s FRAME =========\n", name);
 }
 
 static __u8 n_zwave_get_checksum(const unsigned char *buf)
@@ -615,7 +615,8 @@ static int n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
 	if (debuglevel >= DEBUG_LEVEL_INFO)
 		printk("%s(%d)n_zwave_tty_receive() called count=%d\n",
 			__FILE__,__LINE__, count);
-	n_zwave_print_frame(data, count);
+	n_zwave_print_frame(data, count, "rx data");
+	n_zwave_print_frame(flags, count, "rx flags");
 
 	/* This can happen if stuff comes in on the backup tty */
 	if (!n_zwave || tty != n_zwave->tty)
@@ -632,6 +633,7 @@ static int n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
     /* get current ZWAVE rx buffer */
     buf = NULL;
 	for(i = 0, j = 0; i < count; i++) {
+    	if(unlikely(flags && flags[i] != TTY_NORMAL)) continue;
 
     	if(!buf) {
         	switch(data[i]) {
@@ -689,7 +691,7 @@ static int n_zwave_tty_receive(struct tty_struct *tty, const __u8 *data,
                     printk("%s(%d)n_zwave_tty_receive() got complete frame, count=%d\n",
                         __FILE__,__LINE__, buf->count);
 
-                n_zwave_print_frame(buf->buf, buf->count);
+                n_zwave_print_frame(buf->buf, buf->count, "zwave");
 
             	if(!n_zwave_is_valid_frame(buf->buf, buf->count)) {
                     printk("%s(%d)n_zwave_tty_receive() got invalid frame, sending NAK\n",
