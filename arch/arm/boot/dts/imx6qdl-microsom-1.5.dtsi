@@ -1,0 +1,157 @@
+/*
+ * Copyright (C) 2017 Jeroen Vollenbrock <jeroen@athom.com>
+ *
+ * This file is dual-licensed: you can use it either under the terms
+ * of the GPL or the X11 license, at your option. Note that this dual
+ * licensing only applies to this file, and not this project as a
+ * whole.
+ *
+ *	a) This file is free software; you can redistribute it and/or
+ *	 modify it under the terms of the GNU General Public License
+ *	 version 2 as published by the Free Software Foundation.
+ *
+ *	 This file is distributed in the hope that it will be useful,
+ *	 but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *	 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *	 GNU General Public License for more details.
+ *
+ * Or, alternatively,
+ *
+ *	b) Permission is hereby granted, free of charge, to any person
+ *	 obtaining a copy of this software and associated documentation
+ *	 files (the "Software"), to deal in the Software without
+ *	 restriction, including without limitation the rights to use,
+ *	 copy, modify, merge, publish, distribute, sublicense, and/or
+ *	 sell copies of the Software, and to permit persons to whom the
+ *	 Software is furnished to do so, subject to the following
+ *	 conditions:
+ *
+ *	 The above copyright notice and this permission notice shall be
+ *	 included in all copies or substantial portions of the Software.
+ *
+ *	 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ *	 EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ *	 OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ *	 NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ *	 HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ *	 WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ *	 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ *	 OTHER DEALINGS IN THE SOFTWARE.
+ */
+#include <dt-bindings/gpio/gpio.h>
+/ {
+	regulators {
+		compatible = "simple-bus";
+
+		wlan_en_reg: fixedregulator@2 {
+			compatible = "regulator-fixed";
+			
+			pinctrl-names = "default";
+			pinctrl-0 = <&pinctrl_microsom_tiwl_reg>;
+			
+			regulator-name = "wlan-en-regulator";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			startup-delay-us = <70000>;
+	
+			/* WLAN_EN GPIO for this board - Bank5, pin26 */
+			gpio = <&gpio5 26 GPIO_ACTIVE_HIGH>;
+			enable-active-high;
+		};
+	};
+};
+
+&iomuxc {
+	microsom {
+		pinctrl_microsom_tiwl_bt: microsom-tiwl-bt {
+			fsl,pins = <
+				MX6QDL_PAD_CSI0_DAT14__GPIO6_IO00		0x40013070	/* BT_ENABLE */
+			>;
+		};
+
+		pinctrl_microsom_tiwl_reg: microsom-tiwl-reg {
+			fsl,pins = <
+				MX6QDL_PAD_GPIO_8__XTALOSC_REF_CLK_32K	0x1b0b0		/* EXT CLK */
+				MX6QDL_PAD_CSI0_DAT8__GPIO5_IO26		0x40013070	/* WLAN_ENABLE */
+			>;
+		};
+		
+		pinctrl_microsom_tiwl_wifi: microsom-tiwl-wifi {
+			fsl,pins = <
+				MX6QDL_PAD_CSI0_DAT18__GPIO6_IO04		0x40013070	/* WLAN_IRQ */
+			>;
+		};
+
+		pinctrl_microsom_uart1: microsom-uart1 {
+			fsl,pins = <
+				MX6QDL_PAD_CSI0_DAT10__UART1_TX_DATA	0x1b0b1
+				MX6QDL_PAD_CSI0_DAT11__UART1_RX_DATA	0x1b0b1
+			>;
+		};
+
+		pinctrl_microsom_uart4: microsom-uart4 {
+			fsl,pins = <
+				MX6QDL_PAD_CSI0_DAT12__UART4_TX_DATA	0x1b0b1
+				MX6QDL_PAD_CSI0_DAT13__UART4_RX_DATA	0x1b0b1
+				MX6QDL_PAD_CSI0_DAT16__UART4_RTS_B		0x1b0b1
+				MX6QDL_PAD_CSI0_DAT17__UART4_CTS_B		0x1b0b1
+			>;
+		};
+
+		pinctrl_microsom_usdhc1: microsom-usdhc1 {
+			fsl,pins = <
+				MX6QDL_PAD_SD1_CMD__SD1_CMD				0x17069
+				MX6QDL_PAD_SD1_CLK__SD1_CLK				0x10069
+				MX6QDL_PAD_SD1_DAT0__SD1_DATA0			0x17069
+				MX6QDL_PAD_SD1_DAT1__SD1_DATA1			0x17069
+				MX6QDL_PAD_SD1_DAT2__SD1_DATA2			0x17069
+				MX6QDL_PAD_SD1_DAT3__SD1_DATA3			0x17069
+			>;
+		};
+	};
+};
+
+&uart1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_microsom_uart1>;
+	status = "okay";
+};
+
+/* UART4 - Connected to optional TI WL8xxx Wifi/BT */
+&uart4 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_microsom_uart4>;
+	uart-has-rtscts;
+	status = "okay";
+	
+	bluetooth {
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_microsom_tiwl_bt>;
+		compatible = "ti,wl1831-st";
+		enable-gpios = <&gpio6 0 GPIO_ACTIVE_HIGH>; /* BT_EN */
+	};
+};
+
+/* USDHC1 - Connected to optional TI WL8xxx Wifi/BT */
+&usdhc1 {
+	pinctrl-names = "default";
+	vmmc-supply = <&wlan_en_reg>;
+	pinctrl-0 = <&pinctrl_microsom_usdhc1>;
+	bus-width = <4>;
+	keep-power-in-suspend;
+	no-1-8-v;
+	non-removable;
+	status = "okay";
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	wlcore: wlcore@0 {
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_microsom_tiwl_wifi>;
+		compatible = "ti,wl1831";
+		reg = <2>;
+		interrupts = <4 IRQ_TYPE_EDGE_RISING>;
+		interrupt-parent = <&gpio6>;
+	};
+};
