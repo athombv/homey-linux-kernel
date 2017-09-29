@@ -28,6 +28,7 @@
 #include <linux/nfc.h>
 #include <linux/netdevice.h>
 #include <linux/interrupt.h>
+#include <linux/gpio/consumer.h>
 #include <net/nfc/nfc.h>
 #include "pn533.h"
 
@@ -40,6 +41,7 @@ struct pn533_i2c_phy {
 	struct pn533 *priv;
 
 	bool aborted;
+	struct gpio_desc *gpio_reset;
 
 	int hard_fault;		/*
 				 * < 0 if hardware error occurred (e.g. i2c err)
@@ -182,6 +184,15 @@ static struct pn533_phy_ops i2c_phy_ops = {
 	.abort_cmd = pn533_i2c_abort_cmd,
 };
 
+static void pn533_i2c_reset(struct pn533_i2c_phy *phy)
+{
+	gpiod_set_value_cansleep(phy->gpio_reset, 0);
+	usleep_range(10000, 15000);
+	gpiod_set_value_cansleep(phy->gpio_reset, 1);
+	usleep_range(10000, 15000);
+	gpiod_set_value_cansleep(phy->gpio_reset, 0);
+	usleep_range(80000, 85000);
+}
 
 static int pn533_i2c_probe(struct i2c_client *client,
 			       const struct i2c_device_id *id)
@@ -202,6 +213,15 @@ static int pn533_i2c_probe(struct i2c_client *client,
 			   GFP_KERNEL);
 	if (!phy)
 		return -ENOMEM;
+
+	/* Get GPIO from device tree */
+	phy->gpio_reset = devm_gpiod_get(&client->dev, "reset", GPIOD_OUT_LOW);
+	if (!IS_ERR(phy->gpio_reset)) {
+		pn533_i2c_reset(phy);
+	} else {
+		dev_dbg(&client->dev, "No reset-gpio specified\n");
+	}
+
 
 	phy->i2c_dev = client;
 	i2c_set_clientdata(client, phy);
