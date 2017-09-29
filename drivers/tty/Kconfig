@@ -315,6 +315,18 @@ config N_HDLC
 	  The module will be called n_hdlc. If you want to do that, say M
 	  here.
 
+config N_ZWAVE
+	tristate "ZWave line discipline support"
+	depends on SERIAL_NONSTANDARD
+	help
+	  Allows asynchronous ZWAVE communication with synchronous ZWAVE
+	  modules such as the ZM5304.
+
+	  This driver can be built as a module ( = code which can be
+	  inserted in and removed from the running kernel whenever you want).
+	  The module will be called n_zwave. If you want to do that, say M
+	  here.
+
 config N_GSM
 	tristate "GSM MUX line discipline support (EXPERIMENTAL)"
 	depends on NET
