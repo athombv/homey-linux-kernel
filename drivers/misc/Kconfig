@@ -505,6 +505,13 @@ config PCI_ENDPOINT_TEST
 	---help---
            Enable this configuration option to enable the host side test driver
            for PCI Endpoint.
+           
+
+config APA102_LEDRING
+	tristate "APA102 SPI Ledring Driver"
+	default n
+	help
+	  Add support for APA102 SPI Ledring driver
 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
