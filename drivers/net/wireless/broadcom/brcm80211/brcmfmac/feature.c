@@ -182,6 +182,9 @@ void brcmf_feat_attach(struct brcmf_pub *drvr)
 	/* MBSS does not work for 43362 */
 	if (drvr->bus_if->chip == BRCM_CC_43362_CHIP_ID)
 		ifp->drvr->feat_flags &= ~BIT(BRCMF_FEAT_MBSS);
+	/* MBSS and P2P does not work for 4330 */
+	if (drvr->bus_if->chip == BRCM_CC_4330_CHIP_ID)
+		ifp->drvr->feat_flags &= ~(BIT(BRCMF_FEAT_MBSS) | BIT(BRCMF_FEAT_P2P));
 	brcmf_feat_iovar_int_get(ifp, BRCMF_FEAT_RSDB, "rsdb_mode");
 	brcmf_feat_iovar_int_get(ifp, BRCMF_FEAT_TDLS, "tdls_enable");
 	brcmf_feat_iovar_int_get(ifp, BRCMF_FEAT_MFP, "mfp");
