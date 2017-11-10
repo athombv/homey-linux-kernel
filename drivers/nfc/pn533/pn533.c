@@ -17,7 +17,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
-
 #include <linux/device.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -978,6 +977,32 @@ static void pn533_poll_create_mod_list(struct pn533 *dev,
 		pn533_poll_add_mod(dev, PN533_LISTEN_MOD);
 }
 
+static int pn533_start_auto_poll_complete(struct pn533 *dev, struct sk_buff *resp)
+{
+	u8 nbtg, type, tg, *tgdata;
+	int rc, tgdata_len;
+
+	/* Toggle the DEP polling */
+	if (dev->poll_protocols & NFC_PROTO_NFC_DEP_MASK)
+		dev->poll_dep = 1;
+
+	nbtg = resp->data[0];
+	type = resp->data[1];
+	tgdata_len = resp->data[2]-1; //tg is included
+	tg = resp->data[3];
+	tgdata = &resp->data[4];
+
+	if (nbtg) {
+		rc = pn533_target_found(dev, tg, tgdata, tgdata_len);
+
+		/* We must stop the poll after a valid target found */
+		if (rc == 0)
+			return 0;
+	}
+
+	return -EAGAIN;
+}
+
 static int pn533_start_poll_complete(struct pn533 *dev, struct sk_buff *resp)
 {
 	u8 nbtg, tg, *tgdata;
@@ -1401,6 +1426,55 @@ static int pn533_poll_dep(struct nfc_dev *nfc_dev)
 	return rc;
 }
 
+static int pn533_auto_poll_complete(struct pn533 *dev, void *arg,
+			       struct sk_buff *resp)
+{
+	int rc;
+
+	dev_dbg(dev->dev, "%s\n", __func__);
+
+	if (IS_ERR(resp)) {
+		rc = PTR_ERR(resp);
+
+		nfc_err(dev->dev, "%s  AutoPoll complete error %d\n",
+			__func__, rc);
+
+		if (rc == -ENOENT) {
+			if (dev->poll_mod_count != 0)
+				return rc;
+			goto stop_poll;
+		} else if (rc < 0) {
+			nfc_err(dev->dev,
+				"Error %d when running autoPoll\n", rc);
+			goto stop_poll;
+		}
+	}
+
+
+	/* Initiator mode */
+	rc = pn533_start_auto_poll_complete(dev, resp);
+	if (!rc)
+		goto done;
+
+	if (!dev->poll_mod_count) {
+		dev_dbg(dev->dev, "Polling has been stopped\n");
+		goto done;
+	}
+
+	pn533_poll_next_mod(dev);
+
+done:
+	dev_kfree_skb(resp);
+	return rc;
+
+stop_poll:
+	nfc_err(dev->dev, "Auto polling operation has been stopped\n");
+
+	pn533_poll_reset_mod_list(dev);
+	dev->poll_protocols = 0;
+	return rc;
+}
+
 static int pn533_poll_complete(struct pn533 *dev, void *arg,
 			       struct sk_buff *resp)
 {
@@ -1460,6 +1534,25 @@ stop_poll:
 	return rc;
 }
 
+static struct sk_buff *pn533_alloc_auto_poll_in_frame(struct pn533 *dev)
+{
+	struct sk_buff *skb;
+	int i;
+    u8 data[17] = {0xFF, 0x01};
+	size_t len = 2 + dev->poll_mod_count;
+
+	skb = pn533_alloc_skb(dev, len);
+	if (!skb)
+		return NULL;
+
+    for(i=0; i < dev->poll_mod_count; i++) {
+        data[2+i] = dev->poll_mod_active[i]->data.brty;
+    }
+	skb_put_data(skb, data, len);
+
+	return skb;
+}
+
 static struct sk_buff *pn533_alloc_poll_in_frame(struct pn533 *dev,
 					struct pn533_poll_modulations *mod)
 {
@@ -1472,6 +1565,24 @@ static struct sk_buff *pn533_alloc_poll_in_frame(struct pn533 *dev,
 	skb_put_data(skb, &mod->data, mod->len);
 
 	return skb;
+}
+
+static int pn533_send_auto_poll_frame(struct pn533 *dev)
+{
+	struct sk_buff *skb;
+	int rc;
+
+    skb = pn533_alloc_auto_poll_in_frame(dev);
+
+	rc = pn533_send_cmd_async(dev, PN533_CMD_IN_AUTO_POLL,
+	              skb, pn533_auto_poll_complete, NULL);
+
+    if (rc < 0) {
+		dev_kfree_skb(skb);
+		nfc_err(dev->dev, "Polling loop error %d\n", rc);
+	}
+
+	return rc;
 }
 
 static int pn533_send_poll_frame(struct pn533 *dev)
@@ -1494,7 +1605,9 @@ static int pn533_send_poll_frame(struct pn533 *dev)
 	if (mod->len == 0) {  /* Listen mode */
 		cmd_code = PN533_CMD_TG_INIT_AS_TARGET;
 		skb = pn533_alloc_poll_tg_frame(dev);
-	} else {  /* Polling mode */
+	} else if(dev->poll_mod_count == 1 && mod->data.brty == PN533_POLL_MOD_106KBPS_A) {
+    	return pn533_send_auto_poll_frame(dev);
+	} else { /* Polling mode */
 		cmd_code =  PN533_CMD_IN_LIST_PASSIVE_TARGET;
 		skb = pn533_alloc_poll_in_frame(dev, mod);
 	}
