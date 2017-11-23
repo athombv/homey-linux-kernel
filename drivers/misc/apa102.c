@@ -512,8 +512,9 @@ static int apa102_ledring_run(void *data) {
 	struct apa102_ledring ledring = {};
 	struct apa102_ledring_args *args = (struct apa102_ledring_args *)data;
 	ledring.args = args; //user data
-	ledring.next_transition_steps = 1; //amount of steps after next animation or -1
-	ledring.next_frame_time = FRAMETIME_STATIC; //duration (ms) of a frame after next animation or -1
+	ledring.next_transition_steps = 1; //amount of steps after next animation
+	ledring.next_frame_time = FRAMETIME_STATIC; //duration (ms) of a frame after next animation
+	ledring.transition_steps = 1; //amount of steps for this animation
 	ledring.frametime = FRAMETIME_STATIC; //miliseconds per frame.
 	ledring.led_brightness = BRIGHTNESS;
 	ledring.last_poll = ktime_get();
