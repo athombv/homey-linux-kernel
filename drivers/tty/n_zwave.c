@@ -60,6 +60,7 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
+#include <linux/workqueue.h>
 #include <linux/types.h>
 #include <linux/fcntl.h>
 #include <linux/interrupt.h>
@@ -154,6 +155,7 @@ struct n_zwave {
 	struct n_zwave_buf_list	rx_buf_list;
 	struct n_zwave_buf_list	tx_free_buf_list;
 	struct n_zwave_buf_list	rx_free_buf_list;
+	struct work_struct tx_work;
 	int send_ack;
 	int send_nak;
 	int is_busy;
@@ -564,6 +566,44 @@ static void n_zwave_send_frames(struct n_zwave *n_zwave, struct tty_struct *tty)
 
 }	/* end of n_zwave_send_frames() */
 
+
+/**
+ * n_zwave_tty_process_tx_queue - Callback for transmit wakeup
+ * @tty	- pointer to associated tty instance data
+ *
+ * Called when low level device driver can accept more send data.
+ */
+static void n_zwave_tty_process_tx_queue(struct tty_struct *tty)
+{
+	struct n_zwave *n_zwave = tty2n_zwave(tty);
+
+	if (debuglevel >= DEBUG_LEVEL_INFO)
+		printk("%s(%d)n_zwave_tty_process_tx_queue() called\n",__FILE__,__LINE__);
+
+	if (!n_zwave || n_zwave->magic != ZWAVE_MAGIC)
+		return;
+
+	if (tty != n_zwave->tty) {
+		clear_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
+		return;
+	}
+	set_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
+    if(n_zwave->send_ack) {
+        n_zwave_send_ack(n_zwave);
+    } else if(n_zwave->send_nak) {
+        n_zwave_send_nak(n_zwave);
+    } else {
+	    n_zwave_send_frames(n_zwave, tty); //clears bit if we're done.
+	}
+
+}	/* end of n_zwave_tty_process_tx_queue() */
+
+static void n_zwave_handle_tx_work(struct work_struct *work)
+{
+    struct n_zwave *n_zwave = container_of(work, struct n_zwave, tx_work);
+    n_zwave_tty_process_tx_queue(n_zwave->tty);
+}
+
 /**
  * n_zwave_tty_wakeup - Callback for transmit wakeup
  * @tty	- pointer to associated tty instance data
@@ -584,14 +624,8 @@ static void n_zwave_tty_wakeup(struct tty_struct *tty)
 		clear_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
 		return;
 	}
-	set_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
-    if(n_zwave->send_ack) {
-        n_zwave_send_ack(n_zwave);
-    } else if(n_zwave->send_nak) {
-        n_zwave_send_nak(n_zwave);
-    } else {
-	    n_zwave_send_frames(n_zwave, tty);
-	}
+
+    queue_work(system_unbound_wq, &n_zwave->tx_work);
 
 }	/* end of n_zwave_tty_wakeup() */
 
@@ -905,7 +939,7 @@ static ssize_t n_zwave_tty_write(struct tty_struct *tty, struct file *file,
             printk("%s(%d)n_zwave_tty_write() requesting wakeup.\n",
 			        __FILE__,__LINE__);
 
-		n_zwave_tty_wakeup(tty);
+		n_zwave_tty_process_tx_queue(tty);
 
     	if(!wait_event_interruptible_timeout(tty->write_wait,
     					     (tbuf->state != ZWAVE_FRAME_STATE_WAITING && tbuf->state != ZWAVE_FRAME_STATE_QUEUED),
@@ -1051,6 +1085,7 @@ static struct n_zwave *n_zwave_alloc(void)
 	spin_lock_init(&n_zwave->tx_free_buf_list.spinlock);
 	spin_lock_init(&n_zwave->rx_buf_list.spinlock);
 	spin_lock_init(&n_zwave->tx_buf_list.spinlock);
+	INIT_WORK(&n_zwave->tx_work, n_zwave_handle_tx_work);
 
 	/* allocate free rx buffer list */
 	for(i=0;i<DEFAULT_RX_BUF_COUNT;i++) {
