@@ -18,6 +18,7 @@
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/cpumask.h>
 #include <media/rc-core.h>
 
 #define DRIVER_NAME	"gpio-ir-tx"
@@ -87,7 +88,7 @@ static int gpio_ir_tx(struct rc_dev *dev, unsigned int *txbuf,
 			// space
 			edge = ktime_add_us(edge, txbuf[i]);
 			delta = ktime_us_delta(edge, ktime_get());
-			if (delta > 10) {
+			if (num_online_cpus() > 1 && delta > 10) {
 				spin_unlock_irqrestore(&gpio_ir->lock, flags);
 				usleep_range(delta, delta + 10);
 				spin_lock_irqsave(&gpio_ir->lock, flags);
