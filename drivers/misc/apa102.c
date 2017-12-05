@@ -618,7 +618,7 @@ apa102_write(struct file *filp, const char __user *buf,
 	apa102dev->args.next_cmd = command;
 	spin_unlock(&apa102dev->args.cmd_queue.lock);
 
-	if(apa102dev->enable_gpio && command->command != CMD_BRIGHTNESS);
+	if(apa102dev->enable_gpio && command->command != CMD_BRIGHTNESS)
 		gpiod_set_value_cansleep(apa102dev->enable_gpio, true);
 
 	return status;
@@ -829,7 +829,7 @@ static int apa102_probe(struct spi_device *spi)
 	spi_set_drvdata(spi, apa102dev);
 
 	spi->bits_per_word = 8;
-	spi->mode = SPI_MODE_3;
+	spi->mode = SPI_MODE_0 | SPI_NO_CS;
 	status = spi_setup(spi);
 	if(status != 0)
 		goto fail_spi_setup;
