@@ -49,7 +49,7 @@
 
 #define PCT_FCT 100000
 
-#define APA102_MAX_CMD_SIZE 4096
+#define APA102_MAX_CMD_SIZE 16384
 
 
 #pragma pack(push, 1)
