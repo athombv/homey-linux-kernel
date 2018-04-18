@@ -1,0 +1,13 @@
+menuconfig ZWAVE 
+    bool "Zwave device support"
+
+if ZWAVE
+
+    config ZWAVE_ZM5304
+    	tristate "Sigma Designs ZM5304 Protocol support"
+    	---help---
+    	  You can say N here if you do not intend to attach a ZM5304 zwave controller module
+
+
+endif
+

@@ -156,7 +156,6 @@
 				 * gpio50		| (2,18)		| UC_ERASE
 				 * gpio52		| (2,20)		| UC_BOOT_M
 				 * gpio90		| (3,26)		| UC_RESET
-				 * gpio94		| (3,30)		| ZW_RESET
 				 *
 				 * Notice the gpioX and GPIO (Y,Z) mapping forumla :
 				 * X = (Y-1) * 32 + Z
@@ -168,7 +167,6 @@
 				MX6QDL_PAD_EIM_A20__GPIO2_IO18 0x400130b1
 				MX6QDL_PAD_EIM_A18__GPIO2_IO20 0x4001f0b1
 				MX6QDL_PAD_EIM_D26__GPIO3_IO26 0x4001f0b1
-				MX6QDL_PAD_EIM_D30__GPIO3_IO30 0x4001f0b1
 			>;
 		};
 		
@@ -266,6 +264,8 @@
 			fsl,pins = <
 				MX6QDL_PAD_EIM_D24__UART3_TX_DATA	0x1b0b1
 				MX6QDL_PAD_EIM_D25__UART3_RX_DATA	0x1b0b1
+				
+				MX6QDL_PAD_EIM_D30__GPIO3_IO30      0x4001f0b1
 			>;
 		};
 		
@@ -347,5 +347,10 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_homey_zwave>;
 	status = "okay";
-	homey-zwave;
+
+	homey-zwave {
+		compatible = "sigma,zm5304";
+		enable-gpios = <&gpio3 30 GPIO_ACTIVE_HIGH>; /* ZW_EN */
+		speed = <115200>;
+	};
 };
