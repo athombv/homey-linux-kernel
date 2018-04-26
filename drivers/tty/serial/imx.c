@@ -1216,6 +1216,10 @@ static void imx_enable_dma(struct imx_port *sport)
 	temp |= UCR2_ATEN;
 	writel(temp, sport->port.membase + UCR2);
 
+	temp = readl(sport->port.membase + UCR4);
+	temp |= UCR4_IDDMAEN;
+	writel(temp, sport->port.membase + UCR4);
+
 	imx_setup_ufcr(sport, TXTL_DMA, RXTL_DMA);
 
 	sport->dma_is_enabled = 1;
@@ -1234,6 +1238,10 @@ static void imx_disable_dma(struct imx_port *sport)
 	temp = readl(sport->port.membase + UCR2);
 	temp &= ~(UCR2_CTSC | UCR2_CTS | UCR2_ATEN);
 	writel(temp, sport->port.membase + UCR2);
+
+	temp = readl(sport->port.membase + UCR4);
+	temp &= ~(UCR4_IDDMAEN);
+	writel(temp, sport->port.membase + UCR4);
 
 	imx_setup_ufcr(sport, TXTL_DEFAULT, RXTL_DEFAULT);
 
