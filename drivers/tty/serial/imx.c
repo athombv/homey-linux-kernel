@@ -988,6 +988,9 @@ static void dma_rx_callback(void *data)
 		return;
 	}
 
+	//Clear Aging timer bit
+	writel_relaxed(USR1_AGTIM, sport->port.membase + USR1);
+
 	if (!(sport->port.ignore_status_mask & URXD_DUMMY_READ)) {
 
 		/*
