@@ -108,7 +108,8 @@ struct zm5304_data {
 	enum zm5304_mode		mode;
 	unsigned int			rx_invalid_crc_ctr;
 
-	wait_queue_head_t		wq;
+	wait_queue_head_t		wq_write;
+	wait_queue_head_t		wq_read;
 	struct mutex			write_lock;
 	struct mutex			read_lock;
 
@@ -166,7 +167,6 @@ zm5304_send_data(struct zm5304_data *zm5304dev, const void *data, size_t len) {
     int res;
 	dev_dbg(&zm5304dev->serdev->dev, "TX: prepare to send %zu bytes by serdev.\n", len);
 	res = serdev_device_write(zm5304dev->serdev, (const u8*)data, len, msecs_to_jiffies(WRITE_TIMEOUT_MS));
-	wake_up(&zm5304dev->wq);
 	dev_dbg(&zm5304dev->serdev->dev, "TX: serdev write done.\n");
 	return res;
 }
@@ -240,7 +240,7 @@ static int zm5304_enter_flash_mode(struct zm5304_data *zm5304dev) {
 
 
 	zm5304_send_data(zm5304dev, &flash_cmd, sizeof(flash_cmd));
-	if(wait_event_timeout(zm5304dev->wq,
+	if(wait_event_timeout(zm5304dev->wq_write,
 		kfifo_peek_len(&zm5304dev->rx_tx_status_queue) >= 2,
 		msecs_to_jiffies(ZWAVE_PROG_TIMEOUT_MS)))
 	{
@@ -268,7 +268,7 @@ static long zm5304_send_flash_cmd(struct zm5304_data *zm5304dev, u32 cmd) {
 	zm5304_send_data(zm5304dev, &cmdBE, sizeof(cmdBE));
 
 
-	if(wait_event_timeout(zm5304dev->wq,
+	if(wait_event_timeout(zm5304dev->wq_write,
 		kfifo_peek_len(&zm5304dev->rx_tx_status_queue) >= sizeof(dataBE),
 		msecs_to_jiffies(ZWAVE_PROG_TIMEOUT_MS)))
 	{
@@ -302,6 +302,7 @@ static size_t zm5304_handle_rx_packet(struct zm5304_data *zm5304dev, const u8 *p
         zm5304dev->rx_invalid_crc_ctr = 0;
         kfifo_in(&zm5304dev->rx_queue, pkt, pkt_size);
         zm5304_send_ack(zm5304dev);
+        wake_up(&zm5304dev->wq_read);
     } else {
         dev_err(&zm5304dev->serdev->dev, "Got malformed packet, sending NAK!\n");
         zm5304_send_nak(zm5304dev);
@@ -348,7 +349,7 @@ static int zm5304_receive_buf(struct serdev_device *serdev, const unsigned char 
 	if(zm5304dev->mode == MODE_OPEN_PROG) {
 	    dev_dbg(&serdev->dev, "RX: Sending %zu PROG bytes\n", length);
 		length = kfifo_in(&zm5304dev->rx_tx_status_queue, buf, length);
-		wake_up(&zm5304dev->wq); //Wake up writers
+		wake_up(&zm5304dev->wq_write); //Wake up current writer
 		return length;
 	}
 
@@ -381,7 +382,7 @@ static int zm5304_receive_buf(struct serdev_device *serdev, const unsigned char 
 			case ZWAVE_CAN:
 			    i++;
 				kfifo_in(&zm5304dev->rx_tx_status_queue, pkt, 1);
-				wake_up(&zm5304dev->wq); //Wake up writers
+				wake_up(&zm5304dev->wq_write); //Wake up current writer
 			break;
 			default:
 				dev_err(&serdev->dev, "Unknown frame type from tty, data discarded (%02X)\n", pkt[0]);
@@ -419,7 +420,10 @@ static int zm5304_probe(struct serdev_device *serdev)
 
 	INIT_KFIFO(zm5304dev->rx_queue);
 	INIT_KFIFO(zm5304dev->rx_tx_status_queue);
-	init_waitqueue_head(&zm5304dev->wq);
+
+	init_waitqueue_head(&zm5304dev->wq_read);
+	init_waitqueue_head(&zm5304dev->wq_write);
+
 	mutex_init(&zm5304dev->read_lock);
 	mutex_init(&zm5304dev->write_lock);
 
@@ -549,7 +553,7 @@ zm5304_write(struct file *filp, const char __user *buf,
 		status = zm5304_send_data(zm5304dev, packet, count);
 
 		//p6.2.2, INS12350-4C
-		wait_event_timeout(zm5304dev->wq, !kfifo_is_empty(&zm5304dev->rx_tx_status_queue), msecs_to_jiffies(ACK_TIMEOUT_MS));
+		wait_event_timeout(zm5304dev->wq_write, !kfifo_is_empty(&zm5304dev->rx_tx_status_queue), msecs_to_jiffies(ACK_TIMEOUT_MS));
 
 		if(kfifo_out(&zm5304dev->rx_tx_status_queue, &ack, 1) == 1)
 			switch(ack) {
@@ -599,14 +603,13 @@ zm5304_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 	}
 
 	//read header
-	status = wait_event_interruptible(zm5304dev->wq, (kfifo_peek_len(&zm5304dev->rx_queue) >= sizeof(hdr)));
+	status = wait_event_interruptible(zm5304dev->wq_read, (kfifo_peek_len(&zm5304dev->rx_queue) >= sizeof(hdr)));
 	if(status != 0) goto end;
 
 	status = kfifo_out_peek(&zm5304dev->rx_queue, hdr, sizeof(hdr));
 	BUG_ON(status != 2);
 
-	status = wait_event_interruptible(zm5304dev->wq, (kfifo_peek_len(&zm5304dev->rx_queue) >= zm5304_frame_size(hdr)));
-	if(status != 0) goto end;
+	WARN_ON(kfifo_peek_len(&zm5304dev->rx_queue) < zm5304_frame_size(hdr));
 
 	status = -EFAULT;
 	BUG_ON(kfifo_to_user(&zm5304dev->rx_queue, buf, zm5304_frame_size(hdr), &status) != 0);
@@ -623,7 +626,8 @@ zm5304_poll(struct file *file, poll_table *wait)
 	unsigned int res = 0;
 	struct zm5304_data	*zm5304dev = file->private_data;
 
-	poll_wait(file, &zm5304dev->wq, wait);
+	poll_wait(file, &zm5304dev->wq_read, wait);
+	poll_wait(file, &zm5304dev->wq_write, wait);
 
 	if (!kfifo_is_empty(&zm5304dev->rx_queue))
 		res |= POLLIN;
