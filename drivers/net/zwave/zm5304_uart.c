@@ -302,7 +302,7 @@ static size_t zm5304_handle_rx_packet(struct zm5304_data *zm5304dev, const u8 *p
         zm5304dev->rx_invalid_crc_ctr = 0;
         kfifo_in(&zm5304dev->rx_queue, pkt, pkt_size);
         zm5304_send_ack(zm5304dev);
-        wake_up(&zm5304dev->wq_read);
+        wake_up_all(&zm5304dev->wq_read);
     } else {
         dev_err(&zm5304dev->serdev->dev, "Got malformed packet, sending NAK!\n");
         zm5304_send_nak(zm5304dev);
@@ -349,7 +349,7 @@ static int zm5304_receive_buf(struct serdev_device *serdev, const unsigned char 
 	if(zm5304dev->mode == MODE_OPEN_PROG) {
 	    dev_dbg(&serdev->dev, "RX: Sending %zu PROG bytes\n", length);
 		length = kfifo_in(&zm5304dev->rx_tx_status_queue, buf, length);
-		wake_up(&zm5304dev->wq_write); //Wake up current writer
+		wake_up_all(&zm5304dev->wq_write); //Wake up current writer
 		return length;
 	}
 
@@ -382,7 +382,7 @@ static int zm5304_receive_buf(struct serdev_device *serdev, const unsigned char 
 			case ZWAVE_CAN:
 			    i++;
 				kfifo_in(&zm5304dev->rx_tx_status_queue, pkt, 1);
-				wake_up(&zm5304dev->wq_write); //Wake up current writer
+				wake_up_all(&zm5304dev->wq_write); //Wake up current writer
 			break;
 			default:
 				dev_err(&serdev->dev, "Unknown frame type from tty, data discarded (%02X)\n", pkt[0]);
@@ -590,11 +590,15 @@ zm5304_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
 	struct zm5304_data	*zm5304dev;
 	u8					 hdr[2];
-	ssize_t				status = 0;
+	ssize_t				status = 0, copied = 0;
+
+
+	zm5304dev = filp->private_data;
+
+	dev_dbg(&zm5304dev->serdev->dev, "Reading up to %d bytes\n", count);
 
 	if(count < MIN_ZWAVE_FRAME_SIZE) return -EMSGSIZE;
 
-	zm5304dev = filp->private_data;
 	mutex_lock(&zm5304dev->read_lock);
 
 	if(zm5304dev->mode != MODE_OPEN_REGULAR) {
@@ -602,20 +606,49 @@ zm5304_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 		goto end;
 	}
 
-	//read header
-	status = wait_event_interruptible(zm5304dev->wq_read, (kfifo_peek_len(&zm5304dev->rx_queue) >= sizeof(hdr)));
-	if(status != 0) goto end;
+	while(count) {
+		//read header
+		if(kfifo_peek_len(&zm5304dev->rx_queue) < sizeof(hdr) 
+			|| kfifo_out_peek(&zm5304dev->rx_queue, hdr, sizeof(hdr)) != 2 
+			|| kfifo_peek_len(&zm5304dev->rx_queue) < zm5304_frame_size(hdr) ) {
+			if(copied) goto end;
+			else if(filp->f_flags & O_NONBLOCK){
+				status = -EWOULDBLOCK;
+				goto end;
+			} else {
+				status = wait_event_interruptible(zm5304dev->wq_read, (kfifo_peek_len(&zm5304dev->rx_queue) >= sizeof(hdr)));
+				if(status != 0) goto end;
 
-	status = kfifo_out_peek(&zm5304dev->rx_queue, hdr, sizeof(hdr));
-	BUG_ON(status != 2);
+				WARN_ON(kfifo_out_peek(&zm5304dev->rx_queue, hdr, sizeof(hdr)) != 2 );
 
-	WARN_ON(kfifo_peek_len(&zm5304dev->rx_queue) < zm5304_frame_size(hdr));
+				status = wait_event_interruptible(zm5304dev->wq_read, (kfifo_peek_len(&zm5304dev->rx_queue) >= zm5304_frame_size(hdr)));
+				if(status != 0) goto end;
+			}
+		}
 
-	status = -EFAULT;
-	BUG_ON(kfifo_to_user(&zm5304dev->rx_queue, buf, zm5304_frame_size(hdr), &status) != 0);
+		if(count < zm5304_frame_size(hdr)) {
+			if(!copied)
+				status = -EMSGSIZE;
+			goto end;
+		}
+
+		status = -EFAULT;
+		WARN_ON(kfifo_to_user(&zm5304dev->rx_queue, buf, zm5304_frame_size(hdr), &status) != 0);
+
+		if(status < 0) goto end;
+
+		copied += status;
+		buf += status;
+		count -= status;
+
+		status = copied;
+	}
 
 end:
 	mutex_unlock(&zm5304dev->read_lock);
+
+
+	dev_dbg(&zm5304dev->serdev->dev, "Finished reading %d bytes\n", status);
 
 	return status;
 }
